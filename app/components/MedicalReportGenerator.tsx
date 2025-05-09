@@ -24,6 +24,7 @@ interface Scribe {
   id: string;
   name: string;
   email: string;
+  scribeImage: string;
 }
 
 // Sample data for Doctors and Scribes
@@ -36,8 +37,8 @@ const DOCTORS: Doctor[] = [
 ];
 
 const SCRIBES: Scribe[] = [
-  { id: "scribe1", name: "Kelly", email: "Kelly@PeterboroughOptometric.com" },
-  { id: "scribe2", name: "Amanda", email: "Amanda@PeterboroughOptometric.com" },
+  { id: "scribe1", name: "Kelly", email: "Kelly@PeterboroughOptometric.com", scribeImage: "/scribepics/kelly.jpg" },
+  { id: "scribe2", name: "Michelle", email: "Michelle@PeterboroughOptometric.com", scribeImage: "/scribepics/michelle.jpg" },
 ];
 
 // Updated TOPICS structure as per your request
@@ -81,6 +82,7 @@ interface ReportData {
   doctorImage: string;
   scribeName?: string;
   scribeEmail?: string;
+  scribeImage?: string;
   topicTitles: string; // Combined titles of selected topics
   reportContent: string; // Combined notes from selected topics
   clinicName?: string;
@@ -101,6 +103,7 @@ const MedicalReportGenerator: React.FC<MedicalReportGeneratorProps> = () => {
   const [generatedReportData, setGeneratedReportData] = useState<ReportData | null>(null);
 
   const [docImageSrc, setDocImageSrc] = useState<string>("/doctorpics/face1.jpg"); // default image
+  const [scribeImageSrc, setScribeImageSrc] = useState<string>("/doctorpics/face1.jpg"); // default image
 
   const reportPreviewRef = useRef<HTMLDivElement>(null);
 
@@ -192,6 +195,7 @@ const MedicalReportGenerator: React.FC<MedicalReportGeneratorProps> = () => {
       doctorImage: DOCTORS.find((d) => d.id === selectedDoctor)?.docImage || "face1.jpg",
       scribeName: SCRIBES.find((s) => s.id === selectedScribe)?.name || undefined,
       scribeEmail: SCRIBES.find((s) => s.id === selectedScribe)?.email || undefined,
+      scribeImage: SCRIBES.find((s) => s.id === selectedScribe)?.scribeImage || undefined,
       topicTitles: topicTitles,
       reportContent: code, // 'code' now holds the combined, possibly edited, notes
       clinicName: "Peterborough Optometric",
@@ -202,19 +206,29 @@ const MedicalReportGenerator: React.FC<MedicalReportGeneratorProps> = () => {
   };
 
   const handlePrintReport = () => {
-    const printContents = reportPreviewRef.current?.innerHTML;
-    // Assuming docImageSrc is already defined and is a string
-    // Assuming patientName is already defined and is a string
+    // Ensure generatedReportData is available, print button only shows when it is.
+    if (!generatedReportData || !reportPreviewRef.current) {
+      console.error("Report data or preview ref is not available for printing.");
+      alert("Cannot print: report data is missing.");
+      return;
+    }
 
-    if (printContents && docImageSrc) {
-      // Added check for docImageSrc for robustness
+    const printContents = reportPreviewRef.current.innerHTML;
+    const {
+      patientName = "N/A", // Default patient name if not provided
+      doctorImage: doctorImagePath, // Path from generatedReportData
+      scribeImage: scribeImagePath, // Path from generatedReportData
+    } = generatedReportData;
+
+    if (printContents) {
       const prepareForPrinting = async () => {
-        try {
-          const img = new Image();
-          img.crossOrigin = "Anonymous";
+        let processedContents = printContents;
 
-          // Explicitly type the Promise to resolve with a string
-          const imageLoadPromise = new Promise<string>((resolve, reject) => {
+        // Helper function to convert an image URL to a base64 string
+        const imageToBase64 = (imageUrl: string): Promise<string> => {
+          return new Promise<string>((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = "Anonymous";
             img.onload = () => {
               try {
                 const canvas = document.createElement("canvas");
@@ -222,98 +236,152 @@ const MedicalReportGenerator: React.FC<MedicalReportGeneratorProps> = () => {
                 canvas.height = img.height;
                 const ctx = canvas.getContext("2d");
                 if (!ctx) {
-                  // Always good to check if getContext returned null
                   reject(new Error("Failed to get canvas context"));
                   return;
                 }
                 ctx.drawImage(img, 0, 0);
-                const dataUrl = canvas.toDataURL("image/jpeg");
+                const dataUrl = canvas.toDataURL("image/jpeg"); // Or image/png
                 resolve(dataUrl);
               } catch (error) {
                 reject(error);
               }
             };
-            img.onerror = (err) => reject(new Error(`Failed to load doctor image: ${err}`)); // err can provide more context
+            img.onerror = (errEvent) => {
+              // Try to get more specific error if possible, otherwise a generic one
+              const errorDetail = typeof errEvent === "string" ? errEvent : errEvent && typeof errEvent === "object" && "type" in errEvent ? `type: ${errEvent.type}` : "Unknown error";
+              reject(new Error(`Failed to load image from ${imageUrl}. Detail: ${errorDetail}`));
+            };
+            img.src = imageUrl;
           });
+        };
 
-          img.src = docImageSrc;
+        try {
+          const imagePromises: Promise<any>[] = [];
+          const imagePathsToReplace: string[] = [];
 
-          // Now, imageDataUrl will be correctly inferred as 'string'
-          const imageDataUrl: string = await imageLoadPromise;
+          if (doctorImagePath) {
+            imagePromises.push(imageToBase64(doctorImagePath));
+            imagePathsToReplace.push(doctorImagePath);
+          } else {
+            // Add a placeholder if no doctor image path, so Promise.allSettled indexing remains simple
+            imagePromises.push(Promise.resolve(null));
+            imagePathsToReplace.push(""); // No path to replace
+          }
 
-          // Ensure docImageSrc is a string before using it in replace
-          // (TypeScript might already enforce this if docImageSrc is properly typed)
-          let processedContents = printContents.replace(docImageSrc as string, imageDataUrl);
+          if (scribeImagePath) {
+            imagePromises.push(imageToBase64(scribeImagePath));
+            imagePathsToReplace.push(scribeImagePath);
+          } else {
+            // Add a placeholder if no scribe image path
+            imagePromises.push(Promise.resolve(null));
+            imagePathsToReplace.push("");
+          }
+
+          const results = await Promise.allSettled(imagePromises);
+
+          // Process Doctor Image
+          if (doctorImagePath && results[0].status === "fulfilled" && results[0].value) {
+            const doctorImageDataUrl = results[0].value as string;
+            // Use a more robust replacement to avoid accidentally replacing text
+            // This regex looks for src="<path>" or src='<path>'
+            const docImgRegex = new RegExp(`src=["']${doctorImagePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`, "g");
+            processedContents = processedContents.replace(docImgRegex, `src="${doctorImageDataUrl}"`);
+          } else if (doctorImagePath && results[0].status === "rejected") {
+            console.warn(`Could not convert doctor image (${doctorImagePath}) to base64:`, results[0].reason);
+          }
+
+          // Process Scribe Image
+          const scribeImageIndex = doctorImagePath ? 1 : 0; // Adjust index based on whether doctor image was processed
+          if (scribeImagePath && results[scribeImageIndex].status === "fulfilled" && results[scribeImageIndex].value) {
+            const scribeImageDataUrl = results[scribeImageIndex].value as string;
+            const scribeImgRegex = new RegExp(`src=["']${scribeImagePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`, "g");
+            processedContents = processedContents.replace(scribeImgRegex, `src="${scribeImageDataUrl}"`);
+          } else if (scribeImagePath && results[scribeImageIndex].status === "rejected") {
+            console.warn(`Could not convert scribe image (${scribeImagePath}) to base64:`, results[scribeImageIndex].reason);
+          }
 
           const printWindow = window.open("", "_blank");
           if (printWindow) {
             printWindow.document.write(`
-                <html>
-                  <head>
-                    <title>Patient Eye Exam Summary - ${patientName}</title>
-                    <style>
-                      @media print {
-                        @page { size: portrait; margin: 0.75in; }
-                        body { font-family: Arial, sans-serif; margin: 20px; color: #333; line-height: 1.6; }
-                        .report-header { text-align: center; margin-bottom: 25px; }
-                        .report-header h1 { font-size: 26px; color: #2c5282; }
-                        .patient-info p, .provider-info p { font-size: 14px; }
-                        .provider-info {
-                          display: flex;
-                          align-items: center;
-                          gap: 12px;
-                          margin-bottom: 12px;
-                        }
-                        .provider-info img {
-                          width: 80px;
-                          height: 80px;
-                          border-radius: 50%;
-                          object-fit: cover;
-                          border: 1px solid #ccc;
-                        }
-                        .provider-info p {
-                          margin: 0;
-                          font-size: 14px;
-                        }
+              <html>
+                <head>
+                  <title>Patient Eye Exam Summary - ${patientName}</title>
+                  <style>
+                    @media print {
+                      @page { size: portrait; margin: 0.75in; }
+                      body { font-family: Arial, sans-serif; margin: 20px; color: #333; line-height: 1.6; }
+                      .report-header { text-align: center; margin-bottom: 25px; }
+                      .report-header h1 { font-size: 26px; color: #2c5282; margin: 0 0 5px 0; }
+                      .report-header p { margin: 4px 0; font-size: 13px; color: #555; }
+                      .patient-info p { font-size: 14px; margin: 4px 0; }
+                      /* Styles for provider info including doctor and scribe images */
+                      .provider-info { /* This class should be on the container holding doctor info in RenderPatientReport */
+                        display: flex; /* Example, adjust based on your RenderPatientReport HTML */
+                        align-items: center;
+                        gap: 12px; /* Example gap */
+                        margin-bottom: 12px;
                       }
-                    </style>
-                  </head>
-                  <body>${processedContents}</body>
-                </html>
-              `);
+                      .provider-info img, .report-footer img { /* Target images in provider and footer */
+                        width: 80px; /* Standardized width */
+                        height: 80px; /* Standardized height */
+                        border-radius: 50%;
+                        object-fit: cover;
+                        border: 1px solid #ccc;
+                      }
+                      .provider-info p { margin: 0; font-size: 14px; }
+                      .section-title { font-size: 18px; color: #333; border-bottom: 2px solid #2c5282; padding-bottom: 6px; margin-top: 25px; margin-bottom: 12px; }
+                      .topic-title-print { display: block; margin-top: 12px; margin-bottom: 5px; font-size: 15px; font-weight: bold; color: #4A5568; }
+                      .topic-notes-print { margin-left: 5px; font-size: 14px; white-space: pre-wrap; }
+                      .list-item-print { margin-left: 25px; list-style-type: disc; }
+                      hr.print-separator { border: 0; border-top: 1px dashed #ccc; margin: 20px 0; }
+                      .report-footer { text-align: center; font-size: 12px; color: #777; margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; }
+                      .report-footer h3 { /* Ensure this displays correctly if it contains the scribe image */
+                        display: flex;
+                        align-items: center;
+                        justify-content: center; /* Example alignment */
+                        gap: 10px; /* Example gap */
+                      }
+                      /* Page break controls */
+                      .topic-title-print, h1, h2, h3 { page-break-after: avoid; }
+                      .report-content { page-break-inside: auto; }
+                      .report-footer { page-break-before: avoid; }
+                    }
+                  </style>
+                </head>
+                <body>${processedContents}</body>
+              </html>
+            `);
             printWindow.document.close();
             printWindow.focus();
             setTimeout(() => {
               printWindow.print();
-            }, 500);
+              // Consider closing the print window automatically for some browsers,
+              // but this can be disruptive. Test thoroughly.
+              // setTimeout(() => printWindow.close(), 2000);
+            }, 500); // Delay for content rendering
           } else {
             alert("Could not open print window. Please check your browser's popup settings.");
           }
         } catch (error) {
           console.error("Error preparing document for printing:", error);
-          alert("There was an error preparing the document for printing. Please try again.");
-          // Fallback printing logic (ensure patientName and printContents are accessible here if needed)
+          alert("There was an error preparing the document for printing. Please try again or print without images.");
+          // Fallback to printing without image conversion if the main process fails catastrophically
           const fallbackPrintWindow = window.open("", "_blank");
           if (fallbackPrintWindow) {
             fallbackPrintWindow.document.write(`
               <html>
-                <head>
-                  <title>Patient Eye Exam Summary - ${patientName}</title>
-                  <style>
-                    body { font-family: Arial, sans-serif; margin: 20px; color: #333; line-height: 1.6; }
-                    /* Add essential styles for fallback */
-                  </style>
-                </head>
-                <body>${printContents}</body> {/* Using original printContents for fallback */}
-              </html>
-            `);
+                <head><title>Patient Eye Exam Summary - ${patientName}</title>
+                <style>
+                  body { font-family: Arial, sans-serif; margin: 20px; }
+                  /* Add other essential fallback styles from your @media print block */
+                </style>
+                </head><body>${printContents}</body></html>`);
             fallbackPrintWindow.document.close();
             fallbackPrintWindow.focus();
             fallbackPrintWindow.print();
           }
         }
       };
-
       prepareForPrinting();
     }
   };
@@ -403,11 +471,6 @@ const MedicalReportGenerator: React.FC<MedicalReportGeneratorProps> = () => {
               <strong>Doctor:</strong> {data.doctorName}
             </p>
           </div>
-          {data.scribeName && (
-            <p>
-              <strong>Scribe:</strong> {data.scribeName}
-            </p>
-          )}
         </div>
         <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-1 section-title">Summary of Your Visit</h2>
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">Topics Discussed: {data.topicTitles}</p>
@@ -415,13 +478,26 @@ const MedicalReportGenerator: React.FC<MedicalReportGeneratorProps> = () => {
         <div className="report-content space-y-3">{processContentForDisplay(data.reportContent)}</div>
 
         <div className="report-footer mt-10 pt-6 border-t border-gray-300 dark:border-gray-600 text-center">
-          <p className="text-xs text-gray-500 dark:text-gray-400">If you have any questions regarding this summary,</p>
-          <h3>
-            {" "}
-            <b>
-              please contact {data.scribeName} at their email: {data.scribeEmail}.
-            </b>
+          {/* <p className="text-xs text-gray-500 dark:text-gray-400">If you have any questions regarding this summary,</p> */}
+          <h3 className="flex items-center space-x-4 p-4 bg-gray-100 dark:bg-gray-800 rounded-lg">
+            {data.scribeName && (
+              <p className="text-lg font-semibold text-gray-700 dark:text-gray-300">
+                <strong>Scribe:</strong> {data.scribeName}
+              </p>
+            )}
+            <img
+              src={data.scribeImage} //need to change this to the scribe image
+              alt="Scribe"
+              className="w-16 h-16 rounded-full border-2 border-gray-300 dark:border-gray-600 object-cover transition-transform transform hover:scale-105"
+            />
+            <div className="flex flex-col">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                If you have any questions, please contact <span className="font-semibold text-blue-600">{data.scribeName}</span> at their email:
+              </p>
+              <b className="text-sm text-blue-600">{data.scribeEmail}</b>
+            </div>
           </h3>
+
           <p className="text-xs text-gray-500 dark:text-gray-400">Thank you for choosing {data.clinicName || "our clinic"}. We appreciate your trust in our care.</p>
         </div>
       </div>
